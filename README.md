@@ -9,31 +9,34 @@ This code combines two existing DirtyPipe POC's into one:
 - [eremus-dev](https://github.com/eremus-dev/Dirty-Pipe-sudo-poc)
 	- A direct copy of Kellerman's POC into Python
 
-As a result, this is a Python-based POC that directly pops a root shell by overwriting the sudo binary.
+This code checks if:
+  - /etc/passwd can be overwritten to get a root shell
+  - The sudo binary can be overwritten to get a root shell
+  - The su binary can be overwritten to get a root shell
+
+It then executes the first option that is possible in that order.
 
 For an excellent explanation of the vulnerability itself, see [Kellerman's writeup](https://dirtypipe.cm4all.com/).
 
 ## Getting Started
 
 Requires python 10.X for the use of os.splice
-Make sure your target user has read access to sudo
 
 ## Usage
 
 ```console
-vulnerable@kali:~$ which sudo
-/usr/bin/sudo
-
-vulnerable@kali:~$ python dirty.py /usr/bin/sudo
+vulnerable@kali:~$ python dirty.py
 ```
 
 ## Cleanup
 
-The script writes 2 files to /tmp: 
+The script may write several files to /tmp: 
  - /tmp/backup_sudo
+ - /tmp/backup_su
+ - /tmp/passwd
  - /tmp/sh
 
-Both can be removed to clean up.
+The generated files should be removed after execution, but may require root access to do so.
 
 ##  Dealing with errors
 
