@@ -42,7 +42,7 @@ vulnerable@kali:~$ python dirty.py
 ```
 #### Try a specific target
 ```console
-vulnerable@kali:~$ python dirty.py --passwd
+vulnerable@kali:~$ python dirty.py --target passwd
 ```
 
 ## Cleanup
