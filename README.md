@@ -15,7 +15,7 @@ This code checks if:
   - The su binary can be overwritten to get a root shell
   - The current user can be added to the sudo group in /etc/group
 
-It then executes the first option that is possible in that order.
+It then executes the first option that is possible in that order and drops the user directly into a root shell.
 
 For an excellent explanation of the vulnerability itself, see [Kellerman's writeup](https://dirtypipe.cm4all.com/).
 
