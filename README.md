@@ -13,6 +13,7 @@ This code checks if:
   - /etc/passwd can be overwritten to get a root shell
   - The sudo binary can be overwritten to get a root shell
   - The su binary can be overwritten to get a root shell
+  - The current user can be added to the sudo group in /etc/group
 
 It then executes the first option that is possible in that order.
 
@@ -23,9 +24,25 @@ For an excellent explanation of the vulnerability itself, see [Kellerman's write
 Requires python 10.X for the use of os.splice
 
 ## Usage
+```console
+usage: dirty.py [-h] [--target {passwd,group,sudo,su}]
 
+Use dirty pipe vulnerability to pop root shell
+
+options:
+  -h, --help            show this help message and exit
+  --target {passwd,group,sudo,su}
+                        The target read-only file to overwrite
+```
+
+### Examples
+#### Try all targets until one works
 ```console
 vulnerable@kali:~$ python dirty.py
+```
+#### Try a specific target
+```console
+vulnerable@kali:~$ python dirty.py --passwd
 ```
 
 ## Cleanup
@@ -35,6 +52,7 @@ The script may write several files to /tmp:
  - /tmp/backup_su
  - /tmp/passwd
  - /tmp/sh
+ - /tmp/group
 
 The generated files should be removed after execution, but may require root access to do so.
 
